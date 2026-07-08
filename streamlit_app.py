@@ -654,7 +654,7 @@ def page_carregamentos() -> None:
                 )
 
     st.markdown("### Carregamentos do dia")
-    form_keys = [
+    form_key_bases = [
         "carreg_form_data",
         "carreg_form_saida",
         "carreg_form_placa",
@@ -668,8 +668,9 @@ def page_carregamentos() -> None:
     ]
 
     def _reset_carreg_form_state() -> None:
-        for key in form_keys:
-            st.session_state.pop(key, None)
+        for key in list(st.session_state):
+            if any(key == base or key.startswith(f"{base}_") for base in form_key_bases):
+                st.session_state.pop(key, None)
 
     carregamentos_dia = sorted(registros, key=_numero_rota_ordem)
     label_map: dict[int | None, str] = {None: "Selecionar carregamento"}
@@ -730,6 +731,8 @@ def page_carregamentos() -> None:
         edit_item = None
     if edit_item:
         edit_item["data_saida"] = svc.obter_data_saida_registro(edit_item)
+
+    form_key_suffix = str(edit_id) if edit_id else "novo"
 
     rota_num = ""
     rota_destino = ""
@@ -796,13 +799,13 @@ def page_carregamentos() -> None:
             form_data_iso = st.date_input(
                 "Data",
                 value=_to_date(edit_item.get("data") if edit_item else data_iso),
-                key="carreg_form_data",
+                key=f"carreg_form_data_{form_key_suffix}",
             ).isoformat()
         with col_b:
             form_data_saida = st.date_input(
                 "Data saída",
                 value=_to_date(edit_item.get("data_saida") if edit_item else data_saida_iso),
-                key="carreg_form_saida",
+                key=f"carreg_form_saida_{form_key_suffix}",
             ).isoformat()
         with col_c:
             placa_default = (edit_item.get("placa") or "") if edit_item else ""
@@ -811,20 +814,20 @@ def page_carregamentos() -> None:
             if placa_default and placa_default in placa_options:
                 placa_index = placa_options.index(placa_default)
             placa_escolhida = st.selectbox(
-                "Placa", placa_options, index=placa_index, key="carreg_form_placa"
+                "Placa", placa_options, index=placa_index, key=f"carreg_form_placa_{form_key_suffix}"
             )
             placa_valor = None if placa_escolhida == svc.VALOR_SEM_CAMINHAO else placa_escolhida
 
         col_d, col_e, col_f = st.columns(3)
         with col_d:
-            rota_num_valor = st.text_input("Rota (número)", value=rota_num, key="carreg_form_rota_num")
+            rota_num_valor = st.text_input("Rota (número)", value=rota_num, key=f"carreg_form_rota_num_{form_key_suffix}")
         with col_e:
-            rota_destino_valor = st.text_input("Destino", value=rota_destino, key="carreg_form_rota_destino")
+            rota_destino_valor = st.text_input("Destino", value=rota_destino, key=f"carreg_form_rota_destino_{form_key_suffix}")
         with col_f:
             obs_opcoes = svc.OBSERVACAO_OPCOES
             obs_index = obs_opcoes.index(edit_item.get("observacao")) if edit_item and edit_item.get("observacao") in obs_opcoes else 0
             observacao_valor = st.selectbox(
-                "Observação padrão", obs_opcoes, index=obs_index, key="carreg_form_obs"
+                "Observação padrão", obs_opcoes, index=obs_index, key=f"carreg_form_obs_{form_key_suffix}"
             )
 
         col_g, col_h, col_i = st.columns(3)
@@ -845,7 +848,7 @@ def page_carregamentos() -> None:
                 "Motorista",
                 motorista_options,
                 index=motorista_options.index(motorista_sel),
-                key="carreg_form_motorista",
+                key=f"carreg_form_motorista_{form_key_suffix}",
             )
             motorista_id = motorista_map.get(motorista_escolhido)
         with col_h:
@@ -865,14 +868,14 @@ def page_carregamentos() -> None:
                 "Ajudante",
                 ajudante_options,
                 index=ajudante_options.index(ajudante_sel),
-                key="carreg_form_ajudante",
+                key=f"carreg_form_ajudante_{form_key_suffix}",
             )
             ajudante_id = ajudante_map.get(ajudante_escolhido)
         with col_i:
             obs_extra = st.text_input(
                 "Observação extra",
                 value=(edit_item.get("observacao_extra") or "") if edit_item else "",
-                key="carreg_form_obs_extra",
+                key=f"carreg_form_obs_extra_{form_key_suffix}",
             )
 
         col_j, col_k = st.columns(2)
@@ -892,7 +895,7 @@ def page_carregamentos() -> None:
                 "Cor da observação",
                 cor_labels,
                 index=cor_labels.index(cor_default),
-                key="carreg_form_cor",
+                key=f"carreg_form_cor_{form_key_suffix}",
             )
             observacao_cor = cor_map.get(cor_escolhida)
         with col_k:
