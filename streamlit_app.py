@@ -690,6 +690,16 @@ def page_carregamentos() -> None:
         label_map[cid] = f"[{status}] {rota} | {placa} | {motorista}"
         option_ids.append(cid)
 
+    if "carreg_pending_edit_id" in st.session_state:
+        pending_id = st.session_state.pop("carreg_pending_edit_id")
+        pending_id = pending_id if pending_id in option_ids else None
+        st.session_state["carreg_edit_id"] = pending_id
+        st.session_state["carreg_select"] = pending_id
+        st.session_state["carreg_last_selected_id"] = pending_id
+
+    if st.session_state.pop("carreg_pending_reset_form", False):
+        _reset_carreg_form_state()
+
     edit_id = st.session_state.get("carreg_edit_id")
     try:
         edit_id = int(edit_id) if edit_id is not None else None
@@ -964,18 +974,14 @@ def page_carregamentos() -> None:
         except Exception as exc:
             _set_flash("error", f"Erro ao salvar: {exc}")
         _clear_cached_data()
-        st.session_state["carreg_edit_id"] = None
-        st.session_state["carreg_select"] = None
-        st.session_state["carreg_last_selected_id"] = None
-        _reset_carreg_form_state()
+        st.session_state["carreg_pending_edit_id"] = None
+        st.session_state["carreg_pending_reset_form"] = True
         st.rerun()
 
     if edit_item:
         if st.button("Cancelar edição", key="carreg_cancelar"):
-            st.session_state["carreg_edit_id"] = None
-            st.session_state["carreg_select"] = None
-            st.session_state["carreg_last_selected_id"] = None
-            _reset_carreg_form_state()
+            st.session_state["carreg_pending_edit_id"] = None
+            st.session_state["carreg_pending_reset_form"] = True
             st.rerun()
 
     st.markdown("### Lista do dia")
@@ -1020,10 +1026,8 @@ def page_carregamentos() -> None:
             if action_cols[0].button(
                 "Editar", key=f"carreg_row_edit_{item_id}", use_container_width=True
             ):
-                st.session_state["carreg_edit_id"] = item_id
-                st.session_state["carreg_select"] = item_id
-                st.session_state["carreg_last_selected_id"] = item_id
-                _reset_carreg_form_state()
+                st.session_state["carreg_pending_edit_id"] = item_id
+                st.session_state["carreg_pending_reset_form"] = True
                 st.rerun()
             if action_cols[1].button(
                 "Duplicar", key=f"carreg_row_dup_{item_id}", use_container_width=True
