@@ -18,11 +18,6 @@ except Exception:  # psycopg (v3) pode nao estar instalado localmente
     psycopg = None
     pg_rows = None
 
-try:
-    from psycopg_pool import ConnectionPool
-except Exception:  # psycopg_pool pode nao estar instalado localmente
-    ConnectionPool = None
-
 BASE_DIR = Path(__file__).resolve().parent
 
 DB_PATH = Path(os.environ.get("JR_ESCALA_DB_PATH", BASE_DIR / "jr_escala_web.db"))
@@ -99,10 +94,9 @@ class _PsycopgCursorWrapper:
 
 
 class _PsycopgConnWrapper:
-    def __init__(self, conn, dict_rows: bool, context_manager=None):
+    def __init__(self, conn, dict_rows: bool):
         self._conn = conn
         self._dict_rows = dict_rows
-        self._context_manager = context_manager
 
     def cursor(self):
         if self._dict_rows and pg_rows:
@@ -118,44 +112,17 @@ class _PsycopgConnWrapper:
         return self._conn.rollback()
 
     def close(self):
-        if self._context_manager is not None:
-            return self._context_manager.__exit__(None, None, None)
         return self._conn.close()
 
     def __enter__(self):
-        if self._context_manager is None:
-            self._conn.__enter__()
+        self._conn.__enter__()
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        if self._context_manager is not None:
-            if exc_type:
-                self._conn.rollback()
-            else:
-                self._conn.commit()
-            return self._context_manager.__exit__(exc_type, exc, tb)
         return self._conn.__exit__(exc_type, exc, tb)
 
     def __getattr__(self, name):
         return getattr(self._conn, name)
-
-
-_PSYCOPG_POOL = None
-
-
-def _get_psycopg_pool():
-    global _PSYCOPG_POOL
-    if not USE_POSTGRES or psycopg is None or ConnectionPool is None:
-        return None
-    if _PSYCOPG_POOL is None:
-        _PSYCOPG_POOL = ConnectionPool(
-            conninfo=DATABASE_URL,
-            kwargs={"sslmode": os.environ.get("JR_ESCALA_DB_SSLMODE", "require")},
-            min_size=1,
-            max_size=int(os.environ.get("JR_ESCALA_DB_POOL_MAX", "4")),
-            open=True,
-        )
-    return _PSYCOPG_POOL
 
 
 def get_connection(dict_rows: bool = False):
@@ -167,11 +134,6 @@ def get_connection(dict_rows: bool = False):
             conn = psycopg2.connect(DATABASE_URL, sslmode=sslmode, cursor_factory=cursor_factory)
             return conn
         if psycopg is not None:
-            pool = _get_psycopg_pool()
-            if pool is not None:
-                context_manager = pool.connection()
-                conn = context_manager.__enter__()
-                return _PsycopgConnWrapper(conn, dict_rows, context_manager)
             conn = psycopg.connect(DATABASE_URL, sslmode=sslmode)
             return _PsycopgConnWrapper(conn, dict_rows)
         raise RuntimeError("Driver PostgreSQL nao instalado (psycopg2/psycopg).")
