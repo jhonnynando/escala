@@ -32,6 +32,7 @@ NAV_ITEMS = [
 ]
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def _data_uri(path: Path) -> str:
     if not path or not path.exists():
         return ""
@@ -40,7 +41,8 @@ def _data_uri(path: Path) -> str:
     return f"data:image/{ext};base64,{data}"
 
 
-def _inject_css() -> None:
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_css() -> str:
     css_path = Path("web/static/css/app.css")
     css_text = ""
     if css_path.exists():
@@ -52,6 +54,11 @@ def _inject_css() -> None:
             'url("/static/fonts/Sora.ttf")',
             f"url(data:font/ttf;base64,{font_data})",
         )
+    return css_text
+
+
+def _inject_css() -> None:
+    css_text = _load_css()
     extra = """
     .stApp {
       background: radial-gradient(circle at 15% 10%, #edf2fb, transparent 45%),
@@ -455,6 +462,9 @@ def _init_database_once() -> bool:
 
 
 def _assistentes_sidebar(data_iso: str) -> None:
+    if not st.sidebar.checkbox("Mostrar listas do dia", value=False, key="sidebar_lists_enabled"):
+        return
+
     with st.sidebar.expander("Rotas pendentes", expanded=False):
         registros = _cache_listar_carregamentos(data_iso)
         pendentes = []

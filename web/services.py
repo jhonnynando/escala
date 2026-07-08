@@ -275,6 +275,8 @@ def verificar_disponibilidade(data_iso: str, ignorar: dict[str, int] | None = No
         return resultado
 
     ignorar = ignorar or {}
+    janela_inicio = (alvo - timedelta(days=14)).isoformat()
+    janela_fim = alvo.isoformat()
 
     with get_connection() as conn:
         cur = conn.cursor()
@@ -298,7 +300,12 @@ def verificar_disponibilidade(data_iso: str, ignorar: dict[str, int] | None = No
 
         for ferias_id, col_id, inicio, fim in _safe_fetch(
             cur,
-            "SELECT id, colaborador_id, data_inicio, data_fim FROM ferias",
+            """
+            SELECT id, colaborador_id, data_inicio, data_fim
+            FROM ferias
+            WHERE data_inicio <= ? AND data_fim >= ?
+            """,
+            (data_iso, data_iso),
         ):
             if not col_id or ignorar.get("ferias_id") == ferias_id:
                 continue
@@ -350,7 +357,9 @@ def verificar_disponibilidade(data_iso: str, ignorar: dict[str, int] | None = No
             """
             SELECT id, colaborador_id, data_inicio, data_fim, carregamento_id
             FROM bloqueios
+            WHERE data_inicio <= ? AND data_fim >= ?
             """,
+            (data_iso, data_iso),
         ):
             if not col_id:
                 continue
@@ -377,7 +386,11 @@ def verificar_disponibilidade(data_iso: str, ignorar: dict[str, int] | None = No
             """
             SELECT id, data, data_saida, motorista_id, ajudante_id, placa, observacao
             FROM carregamentos
+            WHERE data = ?
+               OR (data >= ? AND data <= ?)
+               OR (data_saida IS NOT NULL AND data_saida >= ? AND data_saida <= ?)
             """,
+            (data_iso, janela_inicio, janela_fim, janela_inicio, janela_fim),
         ):
             if ignorar.get("carregamento_id") == car_id:
                 continue
