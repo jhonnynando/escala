@@ -8,7 +8,7 @@ from pathlib import Path
 import streamlit as st
 
 from web import services as svc
-from web.db import LOGO_PATH, UPLOAD_DIR, init_db
+from web.db import LOGO_PATH, UPLOAD_DIR, database_connection_scope, init_db
 NAV_ITEMS = [
     "Carregamentos",
     "Escala (CD)",
@@ -2314,7 +2314,36 @@ def page_log() -> None:
         st.info("Nenhum registro encontrado para os filtros.")
         return
 
-    for item in registros:
+    page_size = 25
+    total_pages = max(1, (len(registros) + page_size - 1) // page_size)
+    current_page = max(1, min(total_pages, int(st.session_state.get("log_page", 1))))
+    st.session_state["log_page"] = current_page
+    page_cols = st.columns([1, 3, 1])
+    if page_cols[0].button(
+        "← Anterior",
+        key="log_page_previous",
+        disabled=current_page <= 1,
+        use_container_width=True,
+    ):
+        st.session_state["log_page"] = current_page - 1
+        st.rerun()
+    page_cols[1].markdown(
+        f"<div style='text-align:center'>Página {current_page} de {total_pages} "
+        f"· {len(registros)} registro(s)</div>",
+        unsafe_allow_html=True,
+    )
+    if page_cols[2].button(
+        "Próxima →",
+        key="log_page_next",
+        disabled=current_page >= total_pages,
+        use_container_width=True,
+    ):
+        st.session_state["log_page"] = current_page + 1
+        st.rerun()
+
+    page_start = (current_page - 1) * page_size
+    registros_visiveis = registros[page_start : page_start + page_size]
+    for item in registros_visiveis:
         with st.container():
             st.markdown(f"**{item.get('data_br')}** - {item.get('rota')} - {item.get('placa')}")
             st.write(f"{item.get('motorista')} | {item.get('ajudante')}")
@@ -2459,41 +2488,48 @@ def page_log() -> None:
         st.markdown("---")
 
 
+@st.fragment
+def _render_navigation() -> None:
+    with database_connection_scope():
+        pagina = st.radio(
+            "Navegação",
+            NAV_ITEMS,
+            horizontal=True,
+            label_visibility="collapsed",
+            key="nav_page",
+        )
+
+        if pagina == "Carregamentos":
+            page_carregamentos()
+        elif pagina == "Escala (CD)":
+            page_escala_cd()
+        elif pagina == "Folgas":
+            page_folgas()
+        elif pagina == "Oficinas":
+            page_oficinas()
+        elif pagina == "Rotas Semanais":
+            page_rotas_semanais()
+        elif pagina == "Caminhões":
+            page_caminhoes()
+        elif pagina == "Férias":
+            page_ferias()
+        elif pagina == "Colaboradores":
+            page_colaboradores()
+        elif pagina == "LOG":
+            page_log()
+
+        _assistentes_sidebar(st.session_state.get("carreg_data_iso", date.today().isoformat()))
+
+
 def main() -> None:
     st.set_page_config(page_title="JR Escala", layout="wide")
-    _init_database_or_stop()
+    with database_connection_scope():
+        _init_database_or_stop()
     _init_state()
     _inject_css()
     _render_topbar()
     _render_flash()
-    _assistentes_sidebar(st.session_state.get("carreg_data_iso", date.today().isoformat()))
-
-    pagina = st.radio(
-        "Navegação",
-        NAV_ITEMS,
-        horizontal=True,
-        label_visibility="collapsed",
-        key="nav_page",
-    )
-
-    if pagina == "Carregamentos":
-        page_carregamentos()
-    elif pagina == "Escala (CD)":
-        page_escala_cd()
-    elif pagina == "Folgas":
-        page_folgas()
-    elif pagina == "Oficinas":
-        page_oficinas()
-    elif pagina == "Rotas Semanais":
-        page_rotas_semanais()
-    elif pagina == "Caminhões":
-        page_caminhoes()
-    elif pagina == "Férias":
-        page_ferias()
-    elif pagina == "Colaboradores":
-        page_colaboradores()
-    elif pagina == "LOG":
-        page_log()
+    _render_navigation()
 
 
 if __name__ == "__main__":

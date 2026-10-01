@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 import os
 import re
 import sqlite3
+import sys
 import time
 from pathlib import Path
 from threading import Lock
@@ -110,10 +113,11 @@ class _PsycopgCursorWrapper:
 
 
 class _PsycopgConnWrapper:
-    def __init__(self, conn, dict_rows: bool, pool_context=None):
+    def __init__(self, conn, dict_rows: bool, pool_context=None, owns_connection: bool = True):
         self._conn = conn
         self._dict_rows = dict_rows
         self._pool_context = pool_context
+        self._owns_connection = owns_connection
 
     def cursor(self):
         if self._dict_rows and pg_rows:
@@ -129,6 +133,8 @@ class _PsycopgConnWrapper:
         return self._conn.rollback()
 
     def close(self):
+        if not self._owns_connection:
+            return None
         if self._pool_context is not None:
             context = self._pool_context
             self._pool_context = None
@@ -136,11 +142,17 @@ class _PsycopgConnWrapper:
         return self._conn.close()
 
     def __enter__(self):
+        if not self._owns_connection:
+            return self
         if self._pool_context is None:
             self._conn.__enter__()
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        if not self._owns_connection:
+            if exc_type is not None:
+                self._conn.rollback()
+            return False
         if self._pool_context is not None:
             context = self._pool_context
             self._pool_context = None
@@ -153,6 +165,7 @@ class _PsycopgConnWrapper:
 
 _PSYCOPG_POOL = None
 _PSYCOPG_POOL_LOCK = Lock()
+_CONNECTION_SCOPE = ContextVar("jr_escala_connection_scope", default=None)
 
 
 def _get_psycopg_pool(connect_timeout: int):
@@ -231,21 +244,59 @@ def _is_transient_connection_error(exc: Exception) -> bool:
     )
 
 
+def _new_postgres_connection(dict_rows: bool = False):
+    try:
+        attempts = max(1, min(5, int(os.environ.get("JR_ESCALA_DB_CONNECT_ATTEMPTS", "3"))))
+    except ValueError:
+        attempts = 3
+
+    for attempt in range(attempts):
+        try:
+            return _postgres_connect(dict_rows)
+        except DBError as exc:
+            if attempt == attempts - 1 or not _is_transient_connection_error(exc):
+                raise
+            time.sleep(0.5 * (attempt + 1))
+
+
+@contextmanager
+def database_connection_scope():
+    existing_scope = _CONNECTION_SCOPE.get()
+    if existing_scope is not None or not USE_POSTGRES or psycopg is None:
+        yield
+        return
+
+    state = {"owner": None}
+    token = _CONNECTION_SCOPE.set(state)
+    error_info = (None, None, None)
+    try:
+        yield
+    except BaseException:
+        error_info = sys.exc_info()
+        raise
+    finally:
+        _CONNECTION_SCOPE.reset(token)
+        owner = state.get("owner")
+        if owner is not None:
+            owner.__exit__(*error_info)
+
+
 def get_connection(dict_rows: bool = False):
     ensure_dirs()
     if USE_POSTGRES:
-        try:
-            attempts = max(1, min(5, int(os.environ.get("JR_ESCALA_DB_CONNECT_ATTEMPTS", "3"))))
-        except ValueError:
-            attempts = 3
-
-        for attempt in range(attempts):
-            try:
-                return _postgres_connect(dict_rows)
-            except DBError as exc:
-                if attempt == attempts - 1 or not _is_transient_connection_error(exc):
-                    raise
-                time.sleep(0.5 * (attempt + 1))
+        scope = _CONNECTION_SCOPE.get()
+        if scope is not None and psycopg is not None:
+            owner = scope.get("owner")
+            if owner is None:
+                owner = _new_postgres_connection(False)
+                owner.__enter__()
+                scope["owner"] = owner
+            return _PsycopgConnWrapper(
+                owner._conn,
+                dict_rows,
+                owns_connection=False,
+            )
+        return _new_postgres_connection(dict_rows)
 
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA foreign_keys = ON;")

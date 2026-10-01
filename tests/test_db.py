@@ -72,6 +72,31 @@ class PooledConnectionWrapperTests(unittest.TestCase):
         pool_context.__exit__.assert_called_once_with(None, None, None)
 
 
+class ConnectionScopeTests(unittest.TestCase):
+    @mock.patch.object(db, "ensure_dirs")
+    def test_scope_lazily_reuses_one_connection(self, _ensure_dirs):
+        raw_connection = mock.MagicMock()
+        pool_context = mock.MagicMock()
+        owner = db._PsycopgConnWrapper(raw_connection, False, pool_context)
+
+        with (
+            mock.patch.object(db, "USE_POSTGRES", True),
+            mock.patch.object(db, "psycopg", object()),
+            mock.patch.object(db, "_new_postgres_connection", return_value=owner) as connect,
+        ):
+            with db.database_connection_scope():
+                connect.assert_not_called()
+                first = db.get_connection()
+                second = db.get_connection(dict_rows=True)
+                self.assertIs(first._conn, raw_connection)
+                self.assertIs(second._conn, raw_connection)
+                first.close()
+                second.close()
+
+        connect.assert_called_once_with(False)
+        pool_context.__exit__.assert_called_once_with(None, None, None)
+
+
 class SchemaCheckTests(unittest.TestCase):
     def test_schema_check_uses_single_query(self):
         cursor = mock.Mock()
