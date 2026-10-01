@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import time
 from pathlib import Path
 
 try:
@@ -26,7 +27,16 @@ REPORTS_DIR = Path(os.environ.get("JR_ESCALA_REPORTS_DIR", BASE_DIR / "reports")
 LOGO_PATH = Path(os.environ.get("JR_ESCALA_LOGO_PATH", BASE_DIR / "static" / "img" / "logo-jr.png"))
 FONT_PATH = Path(os.environ.get("JR_ESCALA_FONT_PATH", BASE_DIR / "static" / "fonts" / "Sora.ttf"))
 
-DATABASE_URL = (
+def _clean_database_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        value = value[1:-1].strip()
+    return value or None
+
+
+DATABASE_URL = _clean_database_url(
     os.environ.get("JR_ESCALA_DATABASE_URL")
     or os.environ.get("NEON_DATABASE_URL")
     or os.environ.get("DATABASE_URL")
@@ -125,18 +135,64 @@ class _PsycopgConnWrapper:
         return getattr(self._conn, name)
 
 
+def _postgres_connect(dict_rows: bool):
+    sslmode = os.environ.get("JR_ESCALA_DB_SSLMODE", "require")
+    try:
+        connect_timeout = max(1, int(os.environ.get("JR_ESCALA_DB_CONNECT_TIMEOUT", "10")))
+    except ValueError:
+        connect_timeout = 10
+
+    if psycopg2 is not None:
+        cursor_factory = QmarkDictCursor if dict_rows else QmarkCursor
+        return psycopg2.connect(
+            DATABASE_URL,
+            sslmode=sslmode,
+            connect_timeout=connect_timeout,
+            cursor_factory=cursor_factory,
+        )
+    if psycopg is not None:
+        conn = psycopg.connect(
+            DATABASE_URL,
+            sslmode=sslmode,
+            connect_timeout=connect_timeout,
+        )
+        return _PsycopgConnWrapper(conn, dict_rows)
+    raise RuntimeError("Driver PostgreSQL nao instalado (psycopg2/psycopg).")
+
+
+def _is_transient_connection_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(
+        fragment in message
+        for fragment in (
+            "connection refused",
+            "connection reset",
+            "could not connect",
+            "network is unreachable",
+            "server closed the connection",
+            "temporarily unavailable",
+            "timeout expired",
+            "timed out",
+        )
+    )
+
+
 def get_connection(dict_rows: bool = False):
     ensure_dirs()
     if USE_POSTGRES:
-        sslmode = os.environ.get("JR_ESCALA_DB_SSLMODE", "require")
-        if psycopg2 is not None:
-            cursor_factory = QmarkDictCursor if dict_rows else QmarkCursor
-            conn = psycopg2.connect(DATABASE_URL, sslmode=sslmode, cursor_factory=cursor_factory)
-            return conn
-        if psycopg is not None:
-            conn = psycopg.connect(DATABASE_URL, sslmode=sslmode)
-            return _PsycopgConnWrapper(conn, dict_rows)
-        raise RuntimeError("Driver PostgreSQL nao instalado (psycopg2/psycopg).")
+        try:
+            attempts = max(1, min(5, int(os.environ.get("JR_ESCALA_DB_CONNECT_ATTEMPTS", "3"))))
+        except ValueError:
+            attempts = 3
+
+        for attempt in range(attempts):
+            try:
+                return _postgres_connect(dict_rows)
+            except DBError as exc:
+                if attempt == attempts - 1 or not _is_transient_connection_error(exc):
+                    raise
+                time.sleep(0.5 * (attempt + 1))
+
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA foreign_keys = ON;")
     if dict_rows:

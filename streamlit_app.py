@@ -461,6 +461,48 @@ def _init_database_once() -> bool:
     return True
 
 
+def _database_error_hint(exc: Exception) -> str:
+    message = str(exc).lower()
+    if "cannot assign requested address" in message:
+        return (
+            "A URL atual aponta para um endereço IPv6, que não está acessível nesta hospedagem. "
+            "No Supabase, copie a connection string de **Session pooler** (IPv4, porta 5432) "
+            "e substitua o Secret `JR_ESCALA_DATABASE_URL`."
+        )
+    if "password authentication failed" in message or "authentication failed" in message:
+        return "A senha ou o usuário do banco foi recusado. Atualize a URL de conexão nos Secrets."
+    if any(part in message for part in ("could not translate host", "name or service not known", "nodename nor servname")):
+        return "O endereço do banco não foi encontrado. Copie novamente a connection string no painel do Neon."
+    if "too many connections" in message or "remaining connection slots" in message:
+        return "O limite de conexões do banco foi atingido. Aguarde um instante e tente novamente."
+    if any(part in message for part in ("timeout", "timed out", "connection refused", "network is unreachable")):
+        return "O banco está temporariamente inacessível. Confirme se o projeto Neon está ativo e tente novamente."
+    if "permission denied" in message or "insufficient privilege" in message:
+        return "O usuário do banco não tem permissão para preparar as tabelas da aplicação."
+    return "Confira a URL, o usuário, a senha e o estado do projeto no painel do Neon."
+
+
+def _init_database_or_stop() -> None:
+    try:
+        _init_database_once()
+    except Exception as exc:
+        st.error("Não foi possível conectar ao banco de dados.")
+        st.warning(_database_error_hint(exc))
+        st.info(
+            "No Streamlit Cloud, abra **Manage app → Settings → Secrets** e atualize "
+            "`JR_ESCALA_DATABASE_URL` com uma connection string PostgreSQL compatível com IPv4. "
+            "No Supabase, use **Connect → Session pooler**, porta 5432. Use `sslmode=require`."
+        )
+        st.caption(
+            "Por segurança, os detalhes da conexão não são exibidos aqui. "
+            "A mensagem técnica completa continua disponível em Manage app → Logs."
+        )
+        if st.button("Tentar novamente", type="primary"):
+            _init_database_once.clear()
+            st.rerun()
+        st.stop()
+
+
 def _assistentes_sidebar(data_iso: str) -> None:
     if not st.sidebar.checkbox("Mostrar listas do dia", value=False, key="sidebar_lists_enabled"):
         return
@@ -2354,7 +2396,7 @@ def page_log() -> None:
 
 def main() -> None:
     st.set_page_config(page_title="JR Escala", layout="wide")
-    _init_database_once()
+    _init_database_or_stop()
     _init_state()
     _inject_css()
     _render_topbar()
