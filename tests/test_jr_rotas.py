@@ -14,6 +14,23 @@ class TripDurationTests(unittest.TestCase):
         self.assertEqual(jr_rotas.trip_duration_days("ROTA 1 DIA (BATE E VOLTA)"), 1)
         self.assertEqual(jr_rotas.trip_duration_days("observação livre"), 1)
 
+    def test_extracts_only_day_level_operational_notes(self):
+        notes = jr_rotas._matrix_day_notes(
+            {
+                "0": [
+                    "Observação antes das rotas",
+                    "ITAÚNA (R.40)",
+                    "Mateus Leme",
+                    "COLETA ESPECIAL",
+                    "Retorno após as 16h",
+                ]
+            }
+        )
+        self.assertEqual(
+            notes[0],
+            "Observação antes das rotas · COLETA ESPECIAL · Retorno após as 16h",
+        )
+
     def test_holiday_on_last_day_of_trip_is_reported(self):
         routes = [
             {

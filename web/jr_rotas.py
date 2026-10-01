@@ -170,6 +170,47 @@ def _normalize_cities(value: Any) -> list[dict]:
     return result
 
 
+def _matrix_day_notes(value: Any) -> dict[int, str]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+    if not isinstance(value, dict):
+        return {}
+
+    notes_by_day: dict[int, str] = {}
+    route_pattern = re.compile(r"\(?\s*R\s*\.\s*\d+\s*\)?", re.IGNORECASE)
+    for weekday in range(7):
+        values = value.get(str(weekday), value.get(weekday, []))
+        if not isinstance(values, list):
+            continue
+        current_route = False
+        notes: list[str] = []
+        for raw_value in values:
+            text = _clean_text(raw_value).lstrip("!* ").strip()
+            if not text:
+                continue
+            if route_pattern.search(text):
+                current_route = True
+                continue
+            normalized = text.casefold()
+            if normalized.startswith(("extra bh", "coleta ")):
+                current_route = False
+                notes.append(text)
+                continue
+            if not current_route and text.casefold() not in {
+                "cidade",
+                "cidades",
+                "rota",
+                "rotas",
+            }:
+                notes.append(text)
+        if notes:
+            notes_by_day[weekday] = " · ".join(dict.fromkeys(notes))
+    return notes_by_day
+
+
 def _fetch_source_routes(url: str) -> list[dict]:
     query = """
         SELECT
@@ -199,6 +240,11 @@ def _fetch_source_routes(url: str) -> list[dict]:
         with _source_connection(url) as connection, connection.cursor() as cursor:
             cursor.execute(query)
             rows = cursor.fetchall()
+            cursor.execute(
+                "SELECT value FROM app_settings WHERE key = %s LIMIT 1;",
+                ("route_weekday_matrix_columns",),
+            )
+            setting = cursor.fetchone()
     except JRRotasError:
         raise
     except Exception as exc:
@@ -206,6 +252,7 @@ def _fetch_source_routes(url: str) -> list[dict]:
             "O esquema de rotas do banco de origem não está disponível."
         ) from exc
 
+    notes_by_day = _matrix_day_notes(setting.get("value") if setting else None)
     routes: list[dict] = []
     seen: set[str] = set()
     for row in rows:
@@ -222,7 +269,7 @@ def _fetch_source_routes(url: str) -> list[dict]:
             "dia_semana": WEEKDAYS[weekday],
             "rota": code,
             "destino": _clean_text(row["destination"]),
-            "observacao": "",
+            "observacao": notes_by_day.get(weekday, ""),
             "ordem": int(row.get("position") or 0),
             "cidades": _normalize_cities(row.get("cities")),
         }
