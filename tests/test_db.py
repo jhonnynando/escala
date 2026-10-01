@@ -58,5 +58,28 @@ class ConnectionRetryTests(unittest.TestCase):
         sleep.assert_not_called()
 
 
+class PooledConnectionWrapperTests(unittest.TestCase):
+    def test_context_exit_returns_connection_to_pool(self):
+        connection = mock.MagicMock()
+        pool_context = mock.MagicMock()
+        wrapper = db._PsycopgConnWrapper(connection, False, pool_context)
+
+        with wrapper:
+            pass
+
+        connection.__enter__.assert_not_called()
+        connection.__exit__.assert_not_called()
+        pool_context.__exit__.assert_called_once_with(None, None, None)
+
+
+class SchemaCheckTests(unittest.TestCase):
+    def test_schema_check_uses_single_query(self):
+        cursor = mock.Mock()
+        cursor.fetchone.return_value = (True,)
+
+        self.assertTrue(db._postgres_schema_is_current(cursor))
+        cursor.execute.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -5,6 +5,7 @@ import re
 import sqlite3
 import time
 from pathlib import Path
+from threading import Lock
 
 try:
     import psycopg2
@@ -18,6 +19,11 @@ try:
 except Exception:  # psycopg (v3) pode nao estar instalado localmente
     psycopg = None
     pg_rows = None
+
+try:
+    from psycopg_pool import ConnectionPool
+except Exception:  # psycopg_pool pode nao estar instalado localmente
+    ConnectionPool = None
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -104,9 +110,10 @@ class _PsycopgCursorWrapper:
 
 
 class _PsycopgConnWrapper:
-    def __init__(self, conn, dict_rows: bool):
+    def __init__(self, conn, dict_rows: bool, pool_context=None):
         self._conn = conn
         self._dict_rows = dict_rows
+        self._pool_context = pool_context
 
     def cursor(self):
         if self._dict_rows and pg_rows:
@@ -122,17 +129,59 @@ class _PsycopgConnWrapper:
         return self._conn.rollback()
 
     def close(self):
+        if self._pool_context is not None:
+            context = self._pool_context
+            self._pool_context = None
+            return context.__exit__(None, None, None)
         return self._conn.close()
 
     def __enter__(self):
-        self._conn.__enter__()
+        if self._pool_context is None:
+            self._conn.__enter__()
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        if self._pool_context is not None:
+            context = self._pool_context
+            self._pool_context = None
+            return context.__exit__(exc_type, exc, tb)
         return self._conn.__exit__(exc_type, exc, tb)
 
     def __getattr__(self, name):
         return getattr(self._conn, name)
+
+
+_PSYCOPG_POOL = None
+_PSYCOPG_POOL_LOCK = Lock()
+
+
+def _get_psycopg_pool(connect_timeout: int):
+    global _PSYCOPG_POOL
+    if psycopg is None or ConnectionPool is None:
+        return None
+    if os.environ.get("JR_ESCALA_DB_POOL", "1").strip().lower() in {"0", "false", "no"}:
+        return None
+    if _PSYCOPG_POOL is None:
+        with _PSYCOPG_POOL_LOCK:
+            if _PSYCOPG_POOL is None:
+                try:
+                    max_size = max(1, min(10, int(os.environ.get("JR_ESCALA_DB_POOL_MAX", "4"))))
+                except ValueError:
+                    max_size = 4
+                _PSYCOPG_POOL = ConnectionPool(
+                    conninfo=DATABASE_URL,
+                    kwargs={
+                        "sslmode": os.environ.get("JR_ESCALA_DB_SSLMODE", "require"),
+                        "connect_timeout": connect_timeout,
+                    },
+                    min_size=0,
+                    max_size=max_size,
+                    timeout=connect_timeout,
+                    max_idle=300,
+                    check=ConnectionPool.check_connection,
+                    open=True,
+                )
+    return _PSYCOPG_POOL
 
 
 def _postgres_connect(dict_rows: bool):
@@ -151,6 +200,11 @@ def _postgres_connect(dict_rows: bool):
             cursor_factory=cursor_factory,
         )
     if psycopg is not None:
+        pool = _get_psycopg_pool(connect_timeout)
+        if pool is not None:
+            context = pool.connection()
+            conn = context.__enter__()
+            return _PsycopgConnWrapper(conn, dict_rows, context)
         conn = psycopg.connect(
             DATABASE_URL,
             sslmode=sslmode,
@@ -214,11 +268,38 @@ def insert_and_get_id(cur, query: str, params: tuple) -> int | None:
     return cur.lastrowid
 
 
+def _postgres_schema_is_current(cur) -> bool:
+    cur.execute(
+        """
+        SELECT
+            to_regclass('idx_ajustes_rotas_carregamento') IS NOT NULL
+            AND EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'carregamentos'
+                  AND column_name = 'revisado'
+            )
+            AND EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'folgas'
+                  AND column_name = 'data_saida'
+            );
+        """
+    )
+    row = cur.fetchone()
+    return bool(row and row[0])
+
+
 def init_db() -> None:
     ensure_dirs()
     if USE_POSTGRES:
         with get_connection() as conn:
             cur = conn.cursor()
+            if _postgres_schema_is_current(cur):
+                return
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS colaboradores (

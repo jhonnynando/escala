@@ -520,6 +520,7 @@ def _linha_relatorio_carregamento(item: dict) -> tuple[list[str], str | None]:
     ajudante_nome = formatar_ajudante_nome(
         item.get("ajudante_nome") or DISPLAY_VAZIO,
         item.get("ajudante_id"),
+        item.get("ajudante_funcao"),
     )
     obs_padrao = (item.get("observacao") or "").strip()
     obs_extra = (item.get("observacao_extra") or "").strip()

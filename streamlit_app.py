@@ -9,16 +9,6 @@ import streamlit as st
 
 from web import services as svc
 from web.db import LOGO_PATH, UPLOAD_DIR, init_db
-from web.reports import (
-    _linha_relatorio_carregamento,
-    desenhar_relatorio_carregamentos,
-    exportar_log_para_excel,
-    gerar_relatorio_escala_cd,
-    gerar_relatorio_folgas,
-    gerar_relatorio_oficinas,
-)
-
-
 NAV_ITEMS = [
     "Carregamentos",
     "Escala (CD)",
@@ -367,12 +357,22 @@ def _cache_listar_carregamentos(data_iso: str) -> list[dict]:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _cache_listar_colaboradores_por_funcao(funcao: str, data_iso: str | None = None) -> list[dict]:
-    return svc.listar_colaboradores_por_funcao(funcao, data_iso)
+    funcao_normalizada = funcao.strip().lower()
+    colaboradores = [
+        item
+        for item in _cache_listar_colaboradores(ativos_only=True)
+        if (item.get("funcao") or "").strip().lower() == funcao_normalizada
+    ]
+    if not data_iso:
+        return colaboradores
+    chave = "motoristas" if funcao_normalizada.startswith("motor") else "ajudantes"
+    indisponiveis = _cache_disponibilidade(data_iso, ()).get(chave, set())
+    return [item for item in colaboradores if item.get("id") not in indisponiveis]
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _cache_listar_caminhoes_ativos() -> list[dict]:
-    return svc.listar_caminhoes_ativos()
+    return _cache_listar_caminhoes(ativos_only=True)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -452,7 +452,27 @@ def _cache_consultar_log_carregamentos(filtros_items: tuple[tuple[str, object], 
 
 
 def _clear_cached_data() -> None:
-    st.cache_data.clear()
+    for cached_function in (
+        _cache_listar_carregamentos,
+        _cache_listar_colaboradores_por_funcao,
+        _cache_listar_caminhoes_ativos,
+        _cache_disponibilidade,
+        _cache_listar_colaboradores,
+        _cache_obter_colaborador_por_id,
+        _cache_listar_caminhoes,
+        _cache_listar_folgas,
+        _cache_listar_folgas_por_data_saida,
+        _cache_listar_ferias,
+        _cache_obter_carregamento,
+        _cache_listar_oficinas,
+        _cache_listar_oficinas_por_data_saida,
+        _cache_obter_oficina,
+        _cache_listar_rotas_semanais,
+        _cache_listar_escala_cd,
+        _cache_obter_escala_cd,
+        _cache_consultar_log_carregamentos,
+    ):
+        cached_function.clear()
 
 
 @st.cache_resource(show_spinner=False)
@@ -466,8 +486,8 @@ def _database_error_hint(exc: Exception) -> str:
     if "cannot assign requested address" in message:
         return (
             "A URL atual aponta para um endereço IPv6, que não está acessível nesta hospedagem. "
-            "No Supabase, copie a connection string de **Session pooler** (IPv4, porta 5432) "
-            "e substitua o Secret `JR_ESCALA_DATABASE_URL`."
+            "No Neon, copie novamente a **Pooled connection string** e substitua o Secret "
+            "`JR_ESCALA_DATABASE_URL`. O hostname deve conter `-pooler`."
         )
     if "password authentication failed" in message or "authentication failed" in message:
         return "A senha ou o usuário do banco foi recusado. Atualize a URL de conexão nos Secrets."
@@ -490,8 +510,8 @@ def _init_database_or_stop() -> None:
         st.warning(_database_error_hint(exc))
         st.info(
             "No Streamlit Cloud, abra **Manage app → Settings → Secrets** e atualize "
-            "`JR_ESCALA_DATABASE_URL` com uma connection string PostgreSQL compatível com IPv4. "
-            "No Supabase, use **Connect → Session pooler**, porta 5432. Use `sslmode=require`."
+            "`JR_ESCALA_DATABASE_URL` com a **Pooled connection string** copiada do Neon. "
+            "Use `sslmode=require`."
         )
         st.caption(
             "Por segurança, os detalhes da conexão não são exibidos aqui. "
@@ -526,22 +546,21 @@ def _assistentes_sidebar(data_iso: str) -> None:
         if not pendentes:
             st.write("Sem pendências.")
         else:
-            for item in pendentes:
-                st.write(f"- {item['label']}")
+            st.markdown("\n".join(f"- {item['label']}" for item in pendentes))
 
     with st.sidebar.expander("Disponíveis do dia", expanded=False):
         motoristas = _cache_listar_colaboradores_por_funcao("Motorista", data_iso)
         ajudantes = _cache_listar_colaboradores_por_funcao("Ajudante", data_iso)
-        st.write("Motoristas")
+        st.markdown("**Motoristas**")
         if motoristas:
-            for item in sorted([m.get("nome") for m in motoristas if m.get("nome")]):
-                st.write(f"- {item}")
+            nomes = sorted(m.get("nome") for m in motoristas if m.get("nome"))
+            st.markdown("\n".join(f"- {nome}" for nome in nomes))
         else:
             st.write("Nenhum motorista.")
-        st.write("Ajudantes")
+        st.markdown("**Ajudantes**")
         if ajudantes:
-            for item in sorted([a.get("nome") for a in ajudantes if a.get("nome")]):
-                st.write(f"- {item}")
+            nomes = sorted(a.get("nome") for a in ajudantes if a.get("nome"))
+            st.markdown("\n".join(f"- {nome}" for nome in nomes))
         else:
             st.write("Nenhum ajudante.")
 
@@ -677,6 +696,8 @@ def page_carregamentos() -> None:
             _request_confirm("carreg_confirm_limpar")
     with action_cols[2]:
         if st.button("Gerar relatório", key="carreg_relatorio"):
+            from web.reports import _linha_relatorio_carregamento, desenhar_relatorio_carregamentos
+
             linhas = []
             cores_obs = []
             for item in registros:
@@ -1111,6 +1132,8 @@ def page_oficinas() -> None:
     caminhoes = _cache_listar_caminhoes_ativos()
 
     if st.button("Gerar relatório", key="oficina_relatorio"):
+        from web.reports import gerar_relatorio_oficinas
+
         data_ref = data_saida_iso or data_iso
         reg_saida = _cache_listar_oficinas_por_data_saida(data_ref)
         caminho = gerar_relatorio_oficinas(data_iso, data_saida_iso, reg_saida)
@@ -1323,6 +1346,8 @@ def page_folgas() -> None:
     disponibilidade = _cache_disponibilidade(data_iso, (("folga_id", edit_id),) if edit_id else ())
 
     if st.button("Gerar relatório", key="folga_relatorio"):
+        from web.reports import gerar_relatorio_folgas
+
         data_ref = data_saida_iso or data_iso
         reg_saida = _cache_listar_folgas_por_data_saida(data_ref)
         caminho = gerar_relatorio_folgas(data_iso, data_saida_iso, reg_saida)
@@ -1502,6 +1527,8 @@ def page_escala_cd() -> None:
     ]
 
     if st.button("Gerar relatório", key="escala_relatorio"):
+        from web.reports import gerar_relatorio_escala_cd
+
         caminho = gerar_relatorio_escala_cd(data_iso, data_saida_iso, registros)
         if caminho.exists():
             st.download_button(
@@ -2235,6 +2262,8 @@ def page_log() -> None:
             st.rerun()
 
     if st.button("Exportar Excel", key="log_exportar"):
+        from web.reports import exportar_log_para_excel
+
         caminho = exportar_log_para_excel(registros)
         if caminho.exists():
             st.download_button(

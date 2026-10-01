@@ -7,8 +7,6 @@ from typing import Any, Iterable
 import os
 import re
 
-from PIL import Image, ImageOps
-
 from .db import DBError, UPLOAD_DIR, get_connection, insert_and_get_id
 
 COR_AZUL = "#1B5FAF"
@@ -553,16 +551,21 @@ def listar_colaboradores_por_funcao(
     return [col for col in colaboradores if col["id"] not in indisponiveis]
 
 
-def formatar_ajudante_nome(nome: str, colaborador_id: int | None) -> str:
+def formatar_ajudante_nome(
+    nome: str,
+    colaborador_id: int | None,
+    funcao: str | None = None,
+) -> str:
     if not colaborador_id:
         return nome
     if not nome or nome == DISPLAY_VAZIO:
         return nome or DISPLAY_VAZIO
-    dados = obter_colaborador_por_id(colaborador_id)
-    if not dados:
-        return nome
-    funcao = (dados.get("funcao") or "").lower()
-    if funcao.startswith("motor") and MOTORISTA_AJUDANTE_TAG not in nome:
+    if funcao is None:
+        dados = obter_colaborador_por_id(colaborador_id)
+        if not dados:
+            return nome
+        funcao = dados.get("funcao") or ""
+    if funcao.lower().startswith("motor") and MOTORISTA_AJUDANTE_TAG not in nome:
         return f"{nome} {MOTORISTA_AJUDANTE_TAG}"
     return nome
 
@@ -571,6 +574,8 @@ def formatar_ajudante_nome(nome: str, colaborador_id: int | None) -> str:
 
 
 def salvar_foto_colaborador(file_bytes: bytes, filename: str) -> str | None:
+    from PIL import Image, ImageOps
+
     if not file_bytes:
         return None
     max_bytes = 100 * 1024
@@ -1117,7 +1122,8 @@ def listar_carregamentos(data_iso: str) -> list[dict]:
                    car.motorista_id,
                    car.ajudante_id,
                    mot.nome AS motorista_nome,
-                   aj.nome AS ajudante_nome
+                   aj.nome AS ajudante_nome,
+                   aj.funcao AS ajudante_funcao
             FROM carregamentos car
             LEFT JOIN colaboradores mot ON mot.id = car.motorista_id
             LEFT JOIN colaboradores aj ON aj.id = car.ajudante_id
@@ -1134,7 +1140,10 @@ def obter_carregamento(carregamento_id: int) -> dict | None:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT car.*, mot.nome AS motorista_nome, aj.nome AS ajudante_nome
+            SELECT car.*,
+                   mot.nome AS motorista_nome,
+                   aj.nome AS ajudante_nome,
+                   aj.funcao AS ajudante_funcao
             FROM carregamentos car
             LEFT JOIN colaboradores mot ON mot.id = car.motorista_id
             LEFT JOIN colaboradores aj ON aj.id = car.ajudante_id
@@ -1761,7 +1770,8 @@ def consultar_log_carregamentos(filtros: dict) -> list[dict]:
                car.motorista_id,
                car.ajudante_id,
                mot.nome AS motorista_nome,
-               aj.nome AS ajudante_nome
+               aj.nome AS ajudante_nome,
+               aj.funcao AS ajudante_funcao
         FROM carregamentos car
         LEFT JOIN colaboradores mot ON mot.id = car.motorista_id
         LEFT JOIN colaboradores aj ON aj.id = car.ajudante_id
@@ -1834,6 +1844,7 @@ def consultar_log_carregamentos(filtros: dict) -> list[dict]:
         ajudante_nome = formatar_ajudante_nome(
             registro.get("ajudante_nome") or DISPLAY_VAZIO,
             registro.get("ajudante_id"),
+            registro.get("ajudante_funcao"),
         )
         placa_valor = (registro.get("placa") or "").upper() or DISPLAY_VAZIO
         motorista_valor = registro.get("motorista_nome") or DISPLAY_VAZIO
