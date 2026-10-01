@@ -1369,14 +1369,85 @@ def listar_rotas_semanais(dia_semana: str) -> list[dict]:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT id, dia_semana, rota, destino, observacao
+            SELECT id, dia_semana, rota, destino, observacao, origem, origem_id,
+                   ordem, cidades_json, sincronizado_em
             FROM rotas_semanais
             WHERE dia_semana = ?
-            ORDER BY LOWER(rota) ASC;
+            ORDER BY ordem ASC, LOWER(rota) ASC;
             """,
             (dia,),
         )
         return [dict(row) for row in cur.fetchall()]
+
+
+def listar_todas_rotas_semanais() -> list[dict]:
+    with get_connection(dict_rows=True) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, dia_semana, rota, destino, observacao, origem, origem_id,
+                   ordem, cidades_json, sincronizado_em
+            FROM rotas_semanais
+            ORDER BY
+                CASE dia_semana
+                    WHEN 'segunda' THEN 0 WHEN 'terca' THEN 1
+                    WHEN 'quarta' THEN 2 WHEN 'quinta' THEN 3
+                    WHEN 'sexta' THEN 4 WHEN 'sabado' THEN 5 ELSE 6
+                END,
+                ordem ASC,
+                LOWER(rota) ASC;
+            """
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def sincronizar_rotas_jr(force: bool = False):
+    from .jr_rotas import sync_weekly_routes
+
+    return sync_weekly_routes(force=force)
+
+
+def verificar_feriados_rotas_semanais(data_referencia: date):
+    from .jr_rotas import verify_route_holidays
+
+    rotas = listar_todas_rotas_semanais()
+    inicio = data_referencia - timedelta(days=data_referencia.weekday())
+    fim = inicio + timedelta(days=6)
+    with get_connection(dict_rows=True) as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT data, rota, observacao
+            FROM carregamentos
+            WHERE data >= ? AND data <= ?;
+            """,
+            (inicio.isoformat(), fim.isoformat()),
+        )
+        carregamentos = [dict(row) for row in cur.fetchall()]
+
+    indice_dias = {chave: indice for indice, (chave, _) in enumerate(DIAS_SEMANA)}
+    for rota in rotas:
+        dia_indice = indice_dias.get(rota.get("dia_semana"))
+        codigo = (rota.get("rota") or "").strip()
+        if dia_indice is None or not codigo:
+            continue
+        data_rota = (inicio + timedelta(days=dia_indice)).isoformat()
+        codigo_normalizado = re.sub(r"\s+", "", codigo).upper()
+        for carregamento in carregamentos:
+            texto_rota = re.sub(r"\s+", "", carregamento.get("rota") or "").upper()
+            if carregamento.get("data") == data_rota and codigo_normalizado in texto_rota:
+                observacao = (carregamento.get("observacao") or "").strip()
+                if observacao:
+                    rota["observacao"] = observacao
+                break
+
+    return verify_route_holidays(rotas, data_referencia)
+
+
+def integracao_rotas_jr_ativa() -> bool:
+    from .jr_rotas import integration_configured
+
+    return integration_configured()
 
 
 def adicionar_rota_semana(dia_semana: str, rota: str, destino: str, observacao: str) -> int:
@@ -1386,8 +1457,8 @@ def adicionar_rota_semana(dia_semana: str, rota: str, destino: str, observacao: 
         novo_id = insert_and_get_id(
             cur,
             """
-            INSERT INTO rotas_semanais (dia_semana, rota, destino, observacao)
-            VALUES (?, ?, ?, ?);
+            INSERT INTO rotas_semanais (dia_semana, rota, destino, observacao, origem)
+            VALUES (?, ?, ?, ?, 'local');
             """,
             (dia, rota.strip(), destino.strip(), observacao.strip()),
         )
@@ -1403,21 +1474,34 @@ def editar_rota_semana(rota_id: int, dia_semana: str, rota: str, destino: str, o
             """
             UPDATE rotas_semanais
             SET dia_semana = ?, rota = ?, destino = ?, observacao = ?
-            WHERE id = ?;
+            WHERE id = ? AND COALESCE(origem, 'local') <> 'jr_rotas';
             """,
             (dia, rota.strip(), destino.strip(), observacao.strip(), rota_id),
         )
+        if cur.rowcount == 0:
+            raise ValueError("Esta rota é administrada pelo JR Rotas e não pode ser editada aqui.")
         conn.commit()
 
 
 def remover_rota_semana(rota_id: int) -> None:
     with get_connection() as conn:
         cur = conn.cursor()
-        cur.execute("DELETE FROM rotas_semanais WHERE id = ?;", (rota_id,))
+        cur.execute(
+            "DELETE FROM rotas_semanais WHERE id = ? AND COALESCE(origem, 'local') <> 'jr_rotas';",
+            (rota_id,),
+        )
+        if cur.rowcount == 0:
+            raise ValueError("Esta rota é administrada pelo JR Rotas e não pode ser excluída aqui.")
         conn.commit()
 
 
 def listar_rotas_para_data(data_iso: str) -> list[dict]:
+    try:
+        sincronizar_rotas_jr()
+    except Exception:
+        # A escala local continua disponível durante uma indisponibilidade
+        # temporária da origem e tenta novamente no próximo ciclo.
+        pass
     dia_semana = obter_dia_semana_por_data(data_iso)
     return listar_rotas_semanais(dia_semana)
 

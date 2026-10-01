@@ -337,6 +337,13 @@ def _postgres_schema_is_current(cur) -> bool:
                 WHERE table_schema = current_schema()
                   AND table_name = 'folgas'
                   AND column_name = 'data_saida'
+            )
+            AND EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'rotas_semanais'
+                  AND column_name = 'origem_id'
             );
         """
     )
@@ -452,7 +459,13 @@ def init_db() -> None:
                     dia_semana TEXT NOT NULL,
                     rota TEXT NOT NULL,
                     destino TEXT,
-                    observacao TEXT
+                    observacao TEXT,
+                    origem TEXT NOT NULL DEFAULT 'local',
+                    origem_id TEXT,
+                    origem_hash TEXT,
+                    ordem INTEGER NOT NULL DEFAULT 0,
+                    cidades_json TEXT NOT NULL DEFAULT '[]',
+                    sincronizado_em TEXT
                 );
                 """
             )
@@ -493,6 +506,12 @@ def init_db() -> None:
                 "ALTER TABLE carregamentos ADD COLUMN IF NOT EXISTS revisado INTEGER NOT NULL DEFAULT 0;"
             )
             cur.execute("ALTER TABLE folgas ADD COLUMN IF NOT EXISTS data_saida TEXT;")
+            cur.execute("ALTER TABLE rotas_semanais ADD COLUMN IF NOT EXISTS origem TEXT NOT NULL DEFAULT 'local';")
+            cur.execute("ALTER TABLE rotas_semanais ADD COLUMN IF NOT EXISTS origem_id TEXT;")
+            cur.execute("ALTER TABLE rotas_semanais ADD COLUMN IF NOT EXISTS origem_hash TEXT;")
+            cur.execute("ALTER TABLE rotas_semanais ADD COLUMN IF NOT EXISTS ordem INTEGER NOT NULL DEFAULT 0;")
+            cur.execute("ALTER TABLE rotas_semanais ADD COLUMN IF NOT EXISTS cidades_json TEXT NOT NULL DEFAULT '[]';")
+            cur.execute("ALTER TABLE rotas_semanais ADD COLUMN IF NOT EXISTS sincronizado_em TEXT;")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_colaboradores_funcao_ativo ON colaboradores (funcao, ativo);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_carregamentos_data ON carregamentos (data);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_carregamentos_data_rota ON carregamentos (data, rota);")
@@ -506,6 +525,8 @@ def init_db() -> None:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_bloqueios_periodo ON bloqueios (data_inicio, data_fim);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_bloqueios_carregamento ON bloqueios (carregamento_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_rotas_semanais_dia ON rotas_semanais (dia_semana);")
+            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_rotas_semanais_origem_id ON rotas_semanais (origem, origem_id);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_rotas_semanais_dia_ordem ON rotas_semanais (dia_semana, ordem);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_rotas_suprimidas_data ON rotas_suprimidas (data);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_ajustes_rotas_carregamento ON ajustes_rotas (carregamento_id, id);")
             conn.commit()
@@ -620,7 +641,13 @@ def init_db() -> None:
                 dia_semana TEXT NOT NULL,
                 rota TEXT NOT NULL,
                 destino TEXT,
-                observacao TEXT
+                observacao TEXT,
+                origem TEXT NOT NULL DEFAULT 'local',
+                origem_id TEXT,
+                origem_hash TEXT,
+                ordem INTEGER NOT NULL DEFAULT 0,
+                cidades_json TEXT NOT NULL DEFAULT '[]',
+                sincronizado_em TEXT
             );
             """
         )
@@ -668,6 +695,19 @@ def init_db() -> None:
         colunas_folgas = {row[1] for row in cur.fetchall()}
         if "data_saida" not in colunas_folgas:
             cur.execute("ALTER TABLE folgas ADD COLUMN data_saida TEXT;")
+        cur.execute("PRAGMA table_info(rotas_semanais);")
+        colunas_rotas_semanais = {row[1] for row in cur.fetchall()}
+        migracoes_rotas_semanais = {
+            "origem": "TEXT NOT NULL DEFAULT 'local'",
+            "origem_id": "TEXT",
+            "origem_hash": "TEXT",
+            "ordem": "INTEGER NOT NULL DEFAULT 0",
+            "cidades_json": "TEXT NOT NULL DEFAULT '[]'",
+            "sincronizado_em": "TEXT",
+        }
+        for coluna, definicao in migracoes_rotas_semanais.items():
+            if coluna not in colunas_rotas_semanais:
+                cur.execute(f"ALTER TABLE rotas_semanais ADD COLUMN {coluna} {definicao};")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_colaboradores_funcao_ativo ON colaboradores (funcao, ativo);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_carregamentos_data ON carregamentos (data);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_carregamentos_data_rota ON carregamentos (data, rota);")
@@ -681,6 +721,8 @@ def init_db() -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bloqueios_periodo ON bloqueios (data_inicio, data_fim);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_bloqueios_carregamento ON bloqueios (carregamento_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_rotas_semanais_dia ON rotas_semanais (dia_semana);")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_rotas_semanais_origem_id ON rotas_semanais (origem, origem_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_rotas_semanais_dia_ordem ON rotas_semanais (dia_semana, ordem);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_rotas_suprimidas_data ON rotas_suprimidas (data);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_ajustes_rotas_carregamento ON ajustes_rotas (carregamento_id, id);")
         conn.commit()

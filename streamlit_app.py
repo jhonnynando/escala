@@ -1691,6 +1691,84 @@ def page_rotas_semanais() -> None:
     dia_map = {label: chave for chave, label in dias}
     dia_inv = {chave: label for chave, label in dias}
 
+    integracao_ativa = svc.integracao_rotas_jr_ativa()
+    if integracao_ativa:
+        try:
+            sync_result = svc.sincronizar_rotas_jr()
+            if sync_result.changed:
+                _clear_cached_data()
+            st.caption(
+                f"Fonte oficial: JR Rotas · {sync_result.total} rotas · "
+                "sincronização automática a cada 5 minutos"
+            )
+        except Exception as exc:
+            st.info(f"JR Rotas temporariamente indisponível. Exibindo o último espelho salvo. ({exc})")
+    else:
+        st.caption("Integração com JR Rotas aguardando a configuração protegida do banco de origem.")
+
+    holiday_col, action_col = st.columns([3, 1])
+    with holiday_col:
+        semana_referencia = st.date_input(
+            "Semana de referência",
+            value=date.today(),
+            key="rotas_feriados_semana",
+            help="A verificação considera a semana desta data e todo o período de cada viagem.",
+        )
+    with action_col:
+        st.write("")
+        st.write("")
+        verificar_feriados = st.button(
+            "Verificar feriados",
+            key="rotas_verificar_feriados",
+            use_container_width=True,
+            help="A consulta só é realizada quando este botão é acionado.",
+        )
+
+    semana_inicio = semana_referencia - timedelta(days=semana_referencia.weekday())
+    holiday_key = semana_inicio.isoformat()
+    if verificar_feriados:
+        try:
+            with st.spinner("Verificando feriados aplicáveis às rotas..."):
+                holiday_alerts, holiday_warnings = svc.verificar_feriados_rotas_semanais(
+                    semana_referencia
+                )
+            st.session_state["rotas_feriados_resultado"] = {
+                "key": holiday_key,
+                "alerts": holiday_alerts,
+                "warnings": holiday_warnings,
+            }
+        except Exception as exc:
+            st.session_state["rotas_feriados_resultado"] = {
+                "key": holiday_key,
+                "alerts": [],
+                "warnings": [str(exc)],
+            }
+
+    holiday_result = st.session_state.get("rotas_feriados_resultado")
+    if holiday_result and holiday_result.get("key") == holiday_key:
+        holiday_alerts = holiday_result.get("alerts", [])
+        holiday_warnings = holiday_result.get("warnings", [])
+        if holiday_alerts:
+            with st.expander(
+                f"{len(holiday_alerts)} aviso(s) de feriado nesta semana",
+                expanded=True,
+            ):
+                for alert in holiday_alerts:
+                    periodo = (
+                        f"viagem {alert.departure_date:%d/%m}–{alert.return_date:%d/%m}"
+                        if alert.return_date != alert.departure_date
+                        else f"viagem em {alert.departure_date:%d/%m}"
+                    )
+                    st.markdown(
+                        f"**{alert.holiday_date:%d/%m/%Y} · {alert.city}** — "
+                        f"{alert.holiday_type}: {alert.holiday_name} · "
+                        f"{alert.route_code} — {alert.destination} ({periodo})"
+                    )
+        elif not holiday_warnings:
+            st.caption("Nenhum feriado aplicável às rotas dessa semana.")
+        for warning in holiday_warnings:
+            st.caption(f"Aviso: {warning}")
+
     prev_dia = st.session_state.get("rotas_dia_value")
     dia_label = st.selectbox("Dia da semana", dia_labels, key="rotas_dia")
     dia = dia_map.get(dia_label, dia_default)
@@ -1716,6 +1794,7 @@ def page_rotas_semanais() -> None:
                 dia_labels,
                 index=dia_labels.index(dia_form_label),
                 key="rotas_form_dia",
+                disabled=integracao_ativa,
             )
             dia_form = dia_map.get(dia_form_label, dia_default)
         with col_b:
@@ -1723,19 +1802,28 @@ def page_rotas_semanais() -> None:
                 "Rota",
                 value=(edit_item.get("rota") or "") if edit_item else "",
                 key="rotas_form_rota",
+                disabled=integracao_ativa,
             )
         with col_c:
             destino = st.text_input(
                 "Destino",
                 value=(edit_item.get("destino") or "") if edit_item else "",
                 key="rotas_form_destino",
+                disabled=integracao_ativa,
             )
         observacao = st.text_input(
             "Observação",
             value=(edit_item.get("observacao") or "") if edit_item else "",
             key="rotas_form_obs",
+            disabled=integracao_ativa,
         )
-        submit = st.form_submit_button("Atualizar" if edit_item else "Salvar")
+        submit = st.form_submit_button(
+            "Atualizar" if edit_item else "Salvar",
+            disabled=integracao_ativa,
+        )
+
+    if integracao_ativa:
+        st.caption("Inclusões, alterações e exclusões devem ser feitas no JR Rotas.")
 
     if submit:
         if not rota_texto:
@@ -1794,11 +1882,17 @@ def page_rotas_semanais() -> None:
             action_cols = cols[3].columns(2)
             item_id = item.get("id")
             if action_cols[0].button(
-                "Editar", key=f"rotas_row_edit_{item_id}", use_container_width=True
+                "Editar",
+                key=f"rotas_row_edit_{item_id}",
+                use_container_width=True,
+                disabled=item.get("origem") == "jr_rotas",
             ):
                 st.session_state["rota_edit_id"] = item_id
             if action_cols[1].button(
-                "Excluir", key=f"rotas_row_del_{item_id}", use_container_width=True
+                "Excluir",
+                key=f"rotas_row_del_{item_id}",
+                use_container_width=True,
+                disabled=item.get("origem") == "jr_rotas",
             ):
                 _request_confirm("rota_confirm_excluir", item_id)
     else:
