@@ -2051,96 +2051,28 @@ def page_colaboradores() -> None:
     st.subheader("Colaboradores")
     registros = _cache_listar_colaboradores(ativos_only=False)
 
-    edit_id = st.session_state.get("colab_edit_id")
-    edit_item = None
-    if edit_id:
-        edit_item = _cache_obter_colaborador_por_id(edit_id)
-
-    with st.form("colab_form"):
+    with st.form("colab_create_form", clear_on_submit=True):
         col_a, col_b, col_c = st.columns(3)
         with col_a:
-            nome = st.text_input(
-                "Nome",
-                value=(edit_item.get("nome") or "") if edit_item else "",
-                key="colab_form_nome",
-            )
+            novo_nome = st.text_input("Nome", key="colab_new_nome")
         with col_b:
             funcao_opts = ["Motorista", "Ajudante"]
-            funcao_index = funcao_opts.index(edit_item.get("funcao")) if edit_item and edit_item.get("funcao") in funcao_opts else 0
-            funcao = st.selectbox(
-                "Função",
-                funcao_opts,
-                index=funcao_index,
-                key="colab_form_funcao",
-            )
+            nova_funcao = st.selectbox("Função", funcao_opts, key="colab_new_funcao")
         with col_c:
-            observacao = st.text_input(
-                "Observação",
-                value=(edit_item.get("observacao") or "") if edit_item else "",
-                key="colab_form_obs",
-            )
-        ativo = st.checkbox(
-            "Ativo",
-            value=bool(edit_item.get("ativo")) if edit_item else True,
-            key="colab_form_ativo",
-        )
-        submit = st.form_submit_button("Atualizar" if edit_item else "Salvar")
+            nova_observacao = st.text_input("Observação", key="colab_new_obs")
+        criar = st.form_submit_button("Adicionar colaborador")
 
-    if submit:
-        if not nome or not funcao:
+    if criar:
+        if not novo_nome or not nova_funcao:
             _set_flash("error", "Informe nome e função.")
             st.rerun()
         try:
-            if edit_item:
-                svc.atualizar_colaborador(
-                    edit_id, nome, funcao, observacao, edit_item.get("foto"), ativo
-                )
-                _set_flash("success", "Colaborador atualizado.")
-            else:
-                svc.add_colaborador(nome, funcao, observacao, None)
-                _set_flash("success", "Colaborador salvo.")
+            svc.add_colaborador(novo_nome, nova_funcao, nova_observacao, None)
+            _set_flash("success", "Colaborador salvo.")
         except Exception as exc:
             _set_flash("error", f"Erro ao salvar: {exc}")
-        st.session_state["colab_edit_id"] = None
         _clear_cached_data()
         st.rerun()
-
-    if st.session_state.get("colab_confirm_desativar") is not None:
-        desativar_id = st.session_state.get("colab_confirm_desativar")
-        if _confirm_prompt("colab_confirm_desativar", f"Desativar colaborador #{desativar_id}?"):
-            try:
-                svc.desativar_colaborador(desativar_id)
-                _set_flash("success", "Colaborador desativado.")
-            except Exception as exc:
-                _set_flash("error", f"Erro ao desativar: {exc}")
-            st.session_state["colab_edit_id"] = None
-            _clear_cached_data()
-            st.rerun()
-
-    if st.session_state.get("colab_confirm_excluir") is not None:
-        excluir_id = st.session_state.get("colab_confirm_excluir")
-        if _confirm_prompt(
-            "colab_confirm_excluir",
-            f"Excluir colaborador #{excluir_id} e remover vínculos (folgas, férias e bloqueios)?",
-        ):
-            try:
-                foto_path = svc.excluir_colaborador(excluir_id)
-                if foto_path:
-                    try:
-                        (UPLOAD_DIR / foto_path).unlink()
-                    except OSError:
-                        pass
-                _set_flash("success", "Colaborador excluído.")
-            except Exception as exc:
-                _set_flash("error", f"Erro ao excluir: {exc}")
-            st.session_state["colab_edit_id"] = None
-            _clear_cached_data()
-            st.rerun()
-
-    if edit_item:
-        if st.button("Cancelar edição", key="colab_cancelar"):
-            st.session_state["colab_edit_id"] = None
-            st.rerun()
 
     if registros:
         col_sizes = [2.2, 1.2, 2.6, 1.2, 2.8]
@@ -2162,14 +2094,118 @@ def page_colaboradores() -> None:
                 "Editar", key=f"colab_row_edit_{item_id}", use_container_width=True
             ):
                 st.session_state["colab_edit_id"] = item_id
+                st.session_state.pop("colab_confirm_desativar", None)
+                st.session_state.pop("colab_confirm_excluir", None)
             if action_cols[1].button(
-                "Desativar", key=f"colab_row_desativar_{item_id}", use_container_width=True
+                "Desativar",
+                key=f"colab_row_desativar_{item_id}",
+                use_container_width=True,
+                disabled=not bool(item.get("ativo")),
             ):
                 _request_confirm("colab_confirm_desativar", item_id)
+                st.session_state["colab_edit_id"] = None
+                st.session_state.pop("colab_confirm_excluir", None)
             if action_cols[2].button(
                 "Excluir", key=f"colab_row_excluir_{item_id}", use_container_width=True
             ):
                 _request_confirm("colab_confirm_excluir", item_id)
+                st.session_state["colab_edit_id"] = None
+                st.session_state.pop("colab_confirm_desativar", None)
+
+            if st.session_state.get("colab_edit_id") == item_id:
+                st.info(f"Editando **{item.get('nome') or 'colaborador'}**")
+                with st.form(f"colab_edit_form_{item_id}"):
+                    edit_a, edit_b, edit_c = st.columns(3)
+                    with edit_a:
+                        nome = st.text_input(
+                            "Nome",
+                            value=item.get("nome") or "",
+                            key=f"colab_edit_nome_{item_id}",
+                        )
+                    with edit_b:
+                        funcao_opts = ["Motorista", "Ajudante"]
+                        funcao_atual = item.get("funcao")
+                        funcao_index = funcao_opts.index(funcao_atual) if funcao_atual in funcao_opts else 0
+                        funcao = st.selectbox(
+                            "Função",
+                            funcao_opts,
+                            index=funcao_index,
+                            key=f"colab_edit_funcao_{item_id}",
+                        )
+                    with edit_c:
+                        observacao = st.text_input(
+                            "Observação",
+                            value=item.get("observacao") or "",
+                            key=f"colab_edit_obs_{item_id}",
+                        )
+                    ativo = st.checkbox(
+                        "Ativo",
+                        value=bool(item.get("ativo")),
+                        key=f"colab_edit_ativo_{item_id}",
+                    )
+                    save_col, cancel_col = st.columns(2)
+                    with save_col:
+                        atualizar = st.form_submit_button("Salvar alterações", use_container_width=True)
+                    with cancel_col:
+                        cancelar = st.form_submit_button("Cancelar", use_container_width=True)
+
+                if cancelar:
+                    st.session_state["colab_edit_id"] = None
+                    st.rerun()
+                if atualizar:
+                    if not nome or not funcao:
+                        _set_flash("error", "Informe nome e função.")
+                    else:
+                        try:
+                            svc.atualizar_colaborador(
+                                item_id, nome, funcao, observacao, item.get("foto"), ativo
+                            )
+                            _set_flash("success", "Colaborador atualizado.")
+                        except Exception as exc:
+                            _set_flash("error", f"Erro ao atualizar: {exc}")
+                    st.session_state["colab_edit_id"] = None
+                    _clear_cached_data()
+                    st.rerun()
+
+            if st.session_state.get("colab_confirm_desativar") == item_id:
+                st.warning(f"Desativar **{item.get('nome') or 'este colaborador'}**?")
+                confirm_col, cancel_col, _ = st.columns([1, 1, 4])
+                if confirm_col.button("Sim, desativar", key=f"colab_disable_yes_{item_id}"):
+                    try:
+                        svc.desativar_colaborador(item_id)
+                        _set_flash("success", "Colaborador desativado.")
+                    except Exception as exc:
+                        _set_flash("error", f"Erro ao desativar: {exc}")
+                    st.session_state.pop("colab_confirm_desativar", None)
+                    _clear_cached_data()
+                    st.rerun()
+                if cancel_col.button("Cancelar", key=f"colab_disable_no_{item_id}"):
+                    st.session_state.pop("colab_confirm_desativar", None)
+                    st.rerun()
+
+            if st.session_state.get("colab_confirm_excluir") == item_id:
+                st.warning(
+                    f"Excluir **{item.get('nome') or 'este colaborador'}** e remover seus vínculos "
+                    "com folgas, férias e bloqueios?"
+                )
+                confirm_col, cancel_col, _ = st.columns([1, 1, 4])
+                if confirm_col.button("Sim, excluir", key=f"colab_delete_yes_{item_id}"):
+                    try:
+                        foto_path = svc.excluir_colaborador(item_id)
+                        if foto_path:
+                            try:
+                                (UPLOAD_DIR / foto_path).unlink()
+                            except OSError:
+                                pass
+                        _set_flash("success", "Colaborador excluído.")
+                    except Exception as exc:
+                        _set_flash("error", f"Erro ao excluir: {exc}")
+                    st.session_state.pop("colab_confirm_excluir", None)
+                    _clear_cached_data()
+                    st.rerun()
+                if cancel_col.button("Cancelar", key=f"colab_delete_no_{item_id}"):
+                    st.session_state.pop("colab_confirm_excluir", None)
+                    st.rerun()
     else:
         st.info("Nenhum colaborador cadastrado.")
 
